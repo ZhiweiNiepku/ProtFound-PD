@@ -73,7 +73,7 @@ python train.py --train_url your_data_dir
 To finetune the pretrained model on your dataset:
 
 ```shell
-python train.py --train_url your_data_dir --load_checkpoint_path pretrained_ckpt_path --finetune
+python train.py --train_url your_data_dir --load_ckpt_path pretrained_ckpt_path --finetune
 ```
 
 ## Peptide Generation
@@ -81,7 +81,7 @@ python train.py --train_url your_data_dir --load_checkpoint_path pretrained_ckpt
 Generate peptides by specifying your template and the checkpoint path:
 
 ```shell
-python generate_peptide.py --head_txt your_template_peptide --load_checkpoint_path pretrained_ckpt_path
+python generate_peptide.py --head_txt your_template_peptide --load_ckpt_path pretrained_ckpt_path
 ```
 
 

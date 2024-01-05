@@ -16,7 +16,9 @@ from src.pangu_alpha import PanguAlphaModel, EvalNet
 from src.pangu_alpha_config import PanguAlphaConfig, set_parse
 from src.utils import get_args
 from src.utils import download_data
-import moxing as mox
+import math
+import random
+
 os.environ.pop('CREDENTIAL_PROFILES_FILE', None)
 os.environ.pop('AWS_SHARED_CREDENTIALS_FILE', None)
 base_path = os.path.split(os.path.abspath(__file__))[0]
@@ -29,9 +31,6 @@ print('project_root:', project_root)
 
 
 class AMPDataset:
-    """
-    Dataset for training.
-    """
     def __init__(self, dataset_path, num_samples):
         f = open(dataset_path, 'r')
         self.data = f.readlines()
@@ -58,9 +57,6 @@ class AMPDataset:
 
 
 class Sampler:
-    """
-    Sampler for training.
-    """
     def __init__(self, num_data, local_rank, world_size):
         self.__num_data = num_data
         self.__local_rank = local_rank
@@ -81,8 +77,8 @@ class Sampler:
 
 
 def load_model(args_opt):
-    """
-    Load model checkpoint file.
+    r"""
+     The main function for load model
     """
     # Set execution mode
     context.set_context(save_graphs=False,
@@ -153,16 +149,8 @@ def load_model(args_opt):
 
     print("===config is: ", config, flush=True)
     print("=====args_opt is: ", args_opt, flush=True)
-
-    ckpt_name = args_opt.load_ckpt_name
-    # Define network
     pangu_alpha = PanguAlphaModel(config=config)
-
-    # Load checkpoint files
-    cache_url = '/cache/init_ckpt/model.ckpt'
-    download_data(src_data_url=args_opt.load_ckpt_path, tgt_data_path=cache_url, rank=rank)
-    print("ckpt download succeed!")
-    param_dict = load_checkpoint(cache_url)
+    param_dict = load_checkpoint(args_opt.load_ckpt_path)
     load_param_into_net(pangu_alpha, param_dict)
     print("ckpt load succeed!")
     eval_net = EvalNet(pangu_alpha)
@@ -188,9 +176,7 @@ def load_model(args_opt):
 
 
 def export_mindir(model_predict, config):
-    """
-    Export mindir model.
-    """
+    """Export mindir model"""
     inputs_np = Tensor(np.ones(shape=(config.batch_size, config.seq_length)), mstype.int32)
     current_index = Tensor(np.array([0]), mstype.int32)
 
@@ -208,23 +194,14 @@ def export_mindir(model_predict, config):
 
 
 def run_predict(model_predict, config, args_opt):
-    """
-    run predict.
-    """
+    """run predict"""
     a_dict = {'L': 5, 'S': 6, 'A': 7, 'G': 8, 'E': 9, 'V': 10, 'T': 11, 'R': 12, 'D': 13, 'I': 14,
-     'P': 15, 'K': 16, 'N': 17, 'F': 18, 'Q': 19, 'Y': 20, 'H': 21, 'M': 22, 'C': 23, 'W': 24,
-     'X': 1, 'B': 2, 'Z': 3, 'U': 4, 'O': 26, 'SOT': 25, 'SHT': 27, 'MED': 28, 'LON': 29, 'EOT': 0, 'PAD': 0}
+              'P': 15, 'K': 16, 'N': 17, 'F': 18, 'Q': 19, 'Y': 20, 'H': 21, 'M': 22, 'C': 23, 'W': 24,
+              'X': 1, 'B': 2, 'Z': 3, 'U': 4, 'O': 26, 'SOT': 25, 'SHT': 27, 'MED': 28, 'LON': 29, 'EOT': 0, 'PAD': 0}
     dic = {value: key for key, value in a_dict.items()}
-    from src.generate_jingyan_0923 import generate
-    import mindspore.dataset as ds
-    # Tokenize input sentence to ids
-    output_strs = []
-    cache_url = '/cache/Data/head.txt'
-    mox.file.copy_parallel(args_opt.head_txt, cache_url)
-    # download_data(src_data_url='s3://uniprot-seqdata/finetune_data/', tgt_data_path=cache_url, rank=0)
-    f = open(cache_url, 'r')  # data file
+    from src.generate import generate
+    f = open(args_opt.head_txt, 'r')
     count = 0
-    index = 0
     count_1 = 0
     head_list = []
     total_list = []
@@ -236,13 +213,8 @@ def run_predict(model_predict, config, args_opt):
     for seq in total_list:
         org_seq = seq.strip("\n")
         seq = seq.strip("\n")
-
-        import math
-        import random
-
-        change_count = math.floor(len(seq) * 0.7)
-        # 0.7 is the highest mutation ratio relative to the reference sequence and can be modified according to task requirements.
-        seq_list = []
+        mutation_rate = random.random()
+        change_count = math.floor(len(seq) * mutation_rate)
         change_index_list = []
 
         while len(change_index_list) < change_count:
@@ -250,99 +222,53 @@ def run_predict(model_predict, config, args_opt):
             if index not in change_index_list and index != 0:
                 change_index_list.append(index)
         change_index_list = sorted(change_index_list)
-
         for index in change_index_list:
-            seq = seq[0:index]
-
-            seq_len = math.floor(len(seq))
-            seq = seq[:seq_len]
-
+            seq = seq[:index]
             inputs = [a_dict['SOT']] + [a_dict[i] for i in list(seq)]
-
             sentence = np.array(inputs).reshape(1, -1)
-            # Call inference
             cur_ss = a_dict[org_seq[index]]
-
             output_ids = generate(model_predict, sentence, args_opt, cur_ss, org_seq, index)
-
-            # Decode output ids to sentence
             output_samples = output_ids.tolist()
             output_str = ''
             for i in output_samples[1:]:
                 if i not in [0, 25, 27, 28, 29, 30, 31]:
                     output_str += dic[i]
-
             output = output_str
+            # print(output)
             if index < len(org_seq) - 1:
                 seq = output + org_seq[index + 1:]
             else:
                 seq = output
-
-
         count += 1
         count_1 += 1
         res = org_seq + "," + seq
         print('count:', count, 'Output is:', res, flush=True)
-        output_strs.append(res)
-        if count_1 == 20000:
-            mox.file.copy('/tmp/log/train.log', 's3://pcl-wangzhq/finetune/outputs_0927_70_5_log.txt')
-            count_1 = 0
-
-    try:
-        f = open('/cache/Data/outputs_0927_70_5.txt', 'w')
-        for seq in output_strs:
-            f.write(str(seq) + "\n")
-        f.close()
-        mox.file.copy('/cache/Data/outputs_0927_70_5.txt', 's3://pcl-wangzhq/finetune/outputs_0927_70_5.txt')
-    except:
-        print("Failed to copy files!")
-
 
 
 def main(opt):
-    """
-    Main process for predict or export model
-    """
+    """Main process for predict or export model"""
+    # opt = get_args(True)
+    # set_parse(opt)
     model_predict, config = load_model(opt)
+    #     if opt.export:
+    #         export_mindir(model_predict, config)
+    #     else:
     run_predict(model_predict, config, opt)
 
 
 def file_name_walk(file_dir):
     print("file dir walk begin:{}".format(file_dir))
     for root, dirs, files in os.walk(file_dir):
-        print("root", root)  # now path
-        print("dirs", dirs)  # sub dir list
-        print("files", files)  # file list
+        print("root", root)  
+        print("dirs", dirs)  
+        print("files", files)  
     print("file dir walk end:{}".format(file_dir))
 
 
 if __name__ == "__main__":
+    # main()
     opt = get_args(True)
     set_parse(opt)
     env_dist = os.environ
     rankid = int(os.environ['RANK_ID'])
-    try:
-        main(opt)
-    except Exception as e:
-        print("run exception e:{}".format(e))
-        print("lcm debug train run done copy done exception train_url:{} outpath:{}".format(opt.train_url, output_path))
-        import moxing as mox
-        import shutil
-
-        if rankid % 8 == 0:
-            file_name_walk(output_path)
-            mox.file.copy_parallel(src_url=output_path, dst_url=opt.train_url)
-            shutil.copy("/tmp/log/train.log", "/tmp/log/train.log" + str(rankid))
-            mox.file.copy_parallel(src_url="/tmp/log/", dst_url=opt.train_url)
-        print("train run  >>>>>>>>>>>>>>>>> rank-{} exception end".format(rankid))
-    finally:
-        print("lcm debug train run done copy done train_url:{} outpath:{}".format(opt.train_url, output_path))
-        import moxing as mox
-        import shutil
-
-        if rankid % 8 == 0:
-            file_name_walk(output_path)
-            mox.file.copy_parallel(src_url=output_path, dst_url=opt.train_url)
-            shutil.copy("/tmp/log/train.log", "/tmp/log/train.log" + str(rankid))
-            mox.file.copy_parallel(src_url="/tmp/log/", dst_url=opt.train_url)
-        print("lcm debug train run  >>>>>>>>>>>>>>>>> rank-{} end".format(rankid))
+    main(opt)
